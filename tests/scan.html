@@ -1,0 +1,87 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PrintHub Mobile - printer scan test (real printer)</title>
+<style>body{margin:0;font:13px monospace} iframe{width:390px;height:844px;border:0;display:block} pre{padding:8px}</style>
+<!--
+  Drives the real app UI against a real printer on the LAN.
+  The test server proxies /__printer/<ip>/... to the printer, standing in for the Android app's native HTTP.
+  Usage: tests/scan.html?serial=<printer serial to pick>   (no serial is stored in the repo)
+-->
+<iframe id="app" src="../index.html?e2e=1"></iframe>
+<pre id="log">running...</pre>
+<script type="module">
+const log = [], results = [];
+const say = (s) => { log.push(s); document.getElementById("log").textContent = log.join("\n"); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function check(name, ok, info = "") { results.push(ok); say(`${ok ? "PASS" : "FAIL"} ${name}${info ? "  (" + info + ")" : ""}`); }
+async function until(fn, ms = 20000) { const t = Date.now(); while (Date.now() - t < ms) { try { const v = await fn(); if (v) return v; } catch (_) {} await sleep(150); } return null; }
+const wantSerial = new URLSearchParams(location.search).get("serial") || "";
+
+const frame = document.getElementById("app");
+await new Promise((r) => frame.addEventListener("load", r, { once: true }));
+const w = frame.contentWindow, doc = frame.contentDocument;
+const $ = (s) => doc.querySelector(s), $$ = (s) => [...doc.querySelectorAll(s)];
+const visible = (s) => { const el = $(s); return !!el && !el.hidden; };
+await until(() => w.__printhub);
+const ph = w.__printhub;
+try {
+  check("scan button hidden on the plain web", !visible("#btnPrinterScan"));
+  w.localStorage.removeItem("printhub.scanners");
+  ph.scanner.useTestProxy(`${location.origin}/__printer/`);
+  ph.render();
+  check("scan button shown when scanning is available", visible("#btnPrinterScan"));
+
+  // first use: search the network, pick the printer by serial
+  $("#btnPrinterScan").click();
+  const t0 = Date.now();
+  await until(() => visible("#sheet") && $$("#sheet .item").length > 1, 90000);
+  if (!visible("#sheet")) say(`  diag: busy=${visible("#busy")} "${$("#busyText").textContent}" toast="${$("#toast").textContent}"`);
+  const items = $$("#sheet .item");
+  const labels = items.map((b) => b.textContent.replace(/\s+/g, " ").trim());
+  check("discovery lists scanners on the LAN", items.length >= 2, `${items.length - 0} items, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  const mine = items.find((b) => wantSerial && b.textContent.includes(wantSerial));
+  check("printer found by its serial", !!mine);
+  $("#pname").value = "בדיקה";
+  mine.click();
+  await sleep(300);
+  check("choice saved (name + serial)", ph.scanner.active()?.serial === wantSerial && ph.scanner.active()?.name === "בדיקה");
+
+  // options sheet -> gray, fast -> scan
+  await until(() => visible("#sheet") && $("#goScan"));
+  $('[data-seg="mode"] [data-v="gray"]').click();
+  $('[data-seg="dpi"] [data-v="150"]').click();
+  const before = ph.pages.length;
+  let t1 = Date.now();
+  $("#goScan").click();
+  await until(() => ph.pages.length === before + 1, 120000);
+  check("scan from the printer adds a page", ph.pages.length === before + 1, `${((Date.now() - t1) / 1000).toFixed(1)}s`);
+  const pg = ph.pages.at(-1);
+  check("scanned page is A4-sized", Math.abs(pg.baseW / pg.baseH - 210 / 297) < 0.03, `${Math.round(pg.baseW)}x${Math.round(pg.baseH)} pt`);
+
+  // "scan another page"
+  await until(() => visible("#sheet") && $('[data-i="again"]'));
+  $('[data-i="again"]').click();
+  await until(() => $("#goScan"));
+  t1 = Date.now();
+  $("#goScan").click();
+  await until(() => ph.pages.length === before + 2, 120000);
+  check("second page (scanner busy-wait handled)", ph.pages.length === before + 2, `${((Date.now() - t1) / 1000).toFixed(1)}s`);
+  await until(() => visible("#sheet")); $("#sheetBack").click();
+
+  // scanned pages work with the rest of the app
+  const bytes = await ph.core.savePdfBytes(ph.pages);
+  check("scanned pages export to PDF", bytes.length > 10000, `${Math.round(bytes.length / 1024)} KB`);
+
+  // IP changed (DHCP): saved scanner is found again by serial
+  const st = ph.scanner.saved(); st.list[0].ip = "192.168.1.254"; ph.scanner.save(st);
+  const re = await ph.scanner.resolve(ph.scanner.active());
+  check("printer re-found by serial after an IP change", !!re && re.ip !== "192.168.1.254");
+} catch (e) {
+  check("no exceptions", false, e.stack || e.message);
+}
+w.localStorage.removeItem("printhub.scanners");
+const pass = results.filter(Boolean).length;
+say(`RESULT ${pass}/${results.length} passed`);
+window.__result = { pass, total: results.length, log };
+fetch("/__result", { method: "POST", body: JSON.stringify(window.__result) }).catch(() => {});
+</script>

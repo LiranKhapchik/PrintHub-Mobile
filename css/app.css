@@ -204,3 +204,7 @@ main { padding: 16px 16px calc(120px + var(--safe-b)); max-width: 980px; margin:
   #printArea .pp:last-child { page-break-after: auto; break-after: auto; }
   #printArea img { max-width: 100%; max-height: 100%; }
 }
+
+.seg.wide { width: 100%; }
+.seg.wide button { flex: 1; padding: 10px 6px; font-size: 14px; }
+.pill-btn.wide { width: 100%; padding: 12px; font-size: 16px; border-radius: 14px; }

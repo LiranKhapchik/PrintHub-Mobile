@@ -1,5 +1,6 @@
 // PrintHub Mobile - UI
 import * as core from "./core.js";
+import * as scanner from "./scanner.js";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -63,6 +64,7 @@ async function thumbUrl(p) {
 let sortable = null;
 function render() {
   const has = pages.length > 0;
+  $("#btnPrinterScan").hidden = !scanner.available();
   $("#empty").hidden = has;
   $("#pagesWrap").hidden = !has;
   $("#mainBar").hidden = !has || selected.size > 0;
@@ -142,7 +144,7 @@ const openCamera = () => $("#cameraInput").click();
 document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-act]");
   if (!b) return;
-  ({ open: openFiles, camera: openCamera, add: addMenu, save: saveMenu, print: printDoc })[b.dataset.act]?.();
+  ({ open: openFiles, camera: openCamera, pscan: printerScan, add: addMenu, save: saveMenu, print: printDoc })[b.dataset.act]?.();
 });
 
 // drag & drop (desktop browsers)
@@ -172,13 +174,91 @@ const IC = {
   trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/>',
   install: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M12 7v7"/><path d="M9 11l3 3 3-3"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.01"/>',
+  printer: '<path d="M7 9V3.5h10V9"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v6.5H7z"/>',
 };
 
 function addMenu() {
-  sheet(`<h3>הוספת עמודים</h3>${item("files", IC.folder, "קבצים מהטלפון", "PDF ותמונות, אפשר כמה בבת אחת")}
+  sheet(`<h3>הוספת עמודים</h3>${scanner.available() ? item("pscan", IC.printer, "סריקה מהמדפסת", printerLabel()) : ""}
+    ${item("files", IC.folder, "קבצים מהטלפון", "PDF ותמונות, אפשר כמה בבת אחת")}
     ${item("camera", IC.camera, "סריקה במצלמה", "צילום, חיתוך ושיפור מסמך")}`, (s, close) => {
+    s.querySelector('[data-i="pscan"]')?.addEventListener("click", () => { close(); printerScan(); });
     s.querySelector('[data-i="files"]').onclick = () => { close(); openFiles(); };
     s.querySelector('[data-i="camera"]').onclick = () => { close(); openCamera(); };
+  });
+}
+
+// ------------------------------------------------------------------ scanning from the printer (Android app)
+const SCAN_OPTS = "printhub.scanopts";
+const scanOpts = () => { try { return { mode: "color", dpi: 200, ...JSON.parse(localStorage.getItem(SCAN_OPTS)) }; } catch (_) { return { mode: "color", dpi: 200 }; } };
+function printerLabel() {
+  const p = scanner.active();
+  return p ? `${p.name || p.model} · ${p.ip}` : "בחירת מדפסת בפעם הראשונה";
+}
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+async function choosePrinter() {
+  const found = await busy("מחפש מדפסות ברשת...", (say) => scanner.discover(say));
+  if (!found) return null;
+  if (!found.length) { toast("לא נמצאו מדפסות. ודא שהטלפון מחובר ל-Wi-Fi של הבית ושהמדפסת דולקת.", 6000); return null; }
+  const s = scanner.saved();
+  return new Promise((resolve) => {
+    sheet(`<h3>בחירת מדפסת לסריקה</h3>
+      ${found.map((p, i) => {
+        const known = s.list.find((x) => x.serial === p.serial);
+        return item(`p${i}`, IC.printer, escapeHtml(known?.name || p.model), `${p.ip} · מספר סידורי ${escapeHtml(p.serial || "?")}`);
+      }).join("")}
+      <div class="field"><input type="text" id="pname" placeholder="שם למדפסת (למשל: המדפסת שלי)"></div>`, (sh, close) => {
+      found.forEach((p, i) => sh.querySelector(`[data-i="p${i}"]`).addEventListener("click", () => {
+        const name = sh.querySelector("#pname").value.trim();
+        const st = scanner.saved();
+        const prev = st.list.find((x) => x.serial === p.serial);
+        const entry = { ...p, name: name || prev?.name || p.model };
+        st.list = [...st.list.filter((x) => x.serial !== p.serial), entry];
+        st.active = p.serial;
+        scanner.save(st);
+        close(); toast(`נבחרה: ${entry.name}`); resolve(entry);
+      }));
+      $("#sheetBack").addEventListener("click", () => resolve(null), { once: true });
+    });
+  });
+}
+
+async function printerScan() {
+  if (!scanner.available()) { toast("סריקה מהמדפסת זמינה באפליקציית האנדרואיד"); return; }
+  let p = scanner.active() || (await choosePrinter());
+  if (!p) return;
+  const o = scanOpts();
+  const seg = (name, opts, cur) => `<div class="seg wide" data-seg="${name}">${opts.map(([v, t]) =>
+    `<button data-v="${v}" class="${String(v) === String(cur) ? "on" : ""}">${t}</button>`).join("")}</div>`;
+  sheet(`<h3>סריקה מהמדפסת</h3>
+    <p class="hint" style="margin:0 8px 12px">${escapeHtml(p.name || p.model)} · ${p.ip}<br>הנח את הדף על הזכוכית, פנים למטה.</p>
+    <div class="field">${seg("mode", [["color", "צבע"], ["gray", "אפור"], ["bw", "שחור-לבן"]], o.mode)}</div>
+    <div class="field">${seg("dpi", [[150, "מהיר"], [200, "רגיל"], [300, "איכות גבוהה"]], o.dpi)}</div>
+    <div class="field"><button class="pill-btn wide" id="goScan">סריקה</button></div>
+    ${item("change", IC.printer, "החלפת מדפסת", "חיפוש מחדש ברשת")}`, (s, close) => {
+    s.querySelectorAll("[data-seg]").forEach((g) => g.addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      g.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    }));
+    s.querySelector('[data-i="change"]').onclick = async () => { close(); const np = await choosePrinter(); if (np) printerScan(); };
+    s.querySelector("#goScan").onclick = async () => {
+      const opts = { mode: s.querySelector('[data-seg="mode"] .on').dataset.v, dpi: +s.querySelector('[data-seg="dpi"] .on').dataset.v };
+      localStorage.setItem(SCAN_OPTS, JSON.stringify(opts));
+      close();
+      await busy("מתחבר למדפסת...", async (say) => {
+        p = await scanner.resolve(p, say);
+        const blob = await scanner.scan(p.ip, { ...opts, onProgress: say });
+        let img = blob;
+        if (opts.mode === "bw") img = blob;                       // printer already returns 1-bit
+        const page = await core.pageFromImage(img, `סריקה · ${p.name || p.model}`, { dpi: opts.dpi });
+        pushUndo(); pages = pages.concat(page); render();
+      });
+      if (pages.length) sheet(`<h3>העמוד נסרק</h3>${item("again", IC.printer, "סריקת עמוד נוסף", "הנח את הדף הבא על הזכוכית")}
+        ${item("done", IC.pages, "סיום", "עריכה, שמירה או הדפסה")}`, (s2, close2) => {
+        s2.querySelector('[data-i="again"]').onclick = () => { close2(); printerScan(); };
+        s2.querySelector('[data-i="done"]').onclick = close2;
+      });
+    };
   });
 }
 
@@ -188,11 +268,13 @@ $("#btnMenu").onclick = () => {
   const hasSig = !!loadSignature();
   sheet(`<h3>אפשרויות</h3>
     ${item("sig", IC.sign, hasSig ? "ציור חתימה חדשה" : "ציור חתימה", "נשמרת בטלפון לשימוש חוזר")}
+    ${scanner.available() ? item("printer", IC.printer, "מדפסת לסריקה", printerLabel()) : ""}
     ${pages.length ? item("clear", IC.trash, "ניקוי המסמך", "הקבצים המקוריים לא נמחקים") : ""}
     ${installPrompt ? item("install", IC.install, "התקנה במסך הבית") : ""}
     ${!standalone && isIOS ? item("iosinstall", IC.install, "התקנה באייפון", "שיתוף ← הוסף למסך הבית") : ""}
     ${item("about", IC.info, "אודות PrintHub", "עובד גם בלי אינטרנט אחרי הפתיחה הראשונה")}`, (s, close) => {
     s.querySelector('[data-i="sig"]').onclick = () => { close(); openSigPad(); };
+    s.querySelector('[data-i="printer"]')?.addEventListener("click", () => { close(); choosePrinter(); });
     s.querySelector('[data-i="clear"]')?.addEventListener("click", () => {
       close(); pushUndo(); pages = []; selected.clear(); render(); toast("המסמך נוקה. אפשר לבטל עם החץ למעלה");
     });
@@ -712,4 +794,4 @@ async function receiveShared() {
 
 render();
 receiveShared();
-window.__printhub = { core, get pages() { return pages; }, set pages(v) { pages = v; render(); }, selected, render, ed, addFiles };
+window.__printhub = { core, scanner, get pages() { return pages; }, set pages(v) { pages = v; render(); }, selected, render, ed, addFiles };

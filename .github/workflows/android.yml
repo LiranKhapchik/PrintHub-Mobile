@@ -1,0 +1,87 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["README.md", "tests/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Capacitor
+        run: npm install --no-audit --no-fund
+
+      - name: Create Android project
+        run: |
+          npm run www
+          npx cap add android
+          npx cap sync android
+
+      - name: Configure (cleartext to LAN printers, version, icons)
+        run: |
+          # scanning talks plain HTTP to printers on the home network
+          sed -i 's/<application /<application android:usesCleartextTraffic="true" /' android/app/src/main/AndroidManifest.xml
+          sed -i "s/versionCode 1$/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          sed -i "s/versionName \"1.0\"/versionName \"1.1.${{ github.run_number }}\"/" android/app/build.gradle
+          pip install --quiet pillow
+          python3 scripts/android-icons.py android/app/src/main/res
+          grep -n "usesCleartextTraffic" android/app/src/main/AndroidManifest.xml
+
+      - name: Build APK
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          cd android
+          chmod +x gradlew
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          if [ -n "$KS_B64" ]; then
+            echo "Signing with the project release key (updates install over the previous version)"
+            ./gradlew --no-daemon assembleRelease
+            echo "$KS_B64" | base64 -d > ../release.p12
+            "$BT/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk ../aligned.apk
+            "$BT/apksigner" sign --ks ../release.p12 --ks-type pkcs12 --ks-pass env:KS_PASS --ks-key-alias "$KS_ALIAS" \
+              --out ../PrintHub.apk ../aligned.apk
+            rm -f ../release.p12
+          else
+            echo "::warning::No signing secrets - building a debug-signed APK (uninstall before installing a newer build)"
+            ./gradlew --no-daemon assembleDebug
+            cp app/build/outputs/apk/debug/app-debug.apk ../PrintHub.apk
+          fi
+          "$BT/apksigner" verify --print-certs ../PrintHub.apk | head -3
+          ls -la ../PrintHub.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PrintHub-apk
+          path: PrintHub.apk
+
+      - name: Publish release "android-latest"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --cleanup-tag -y || true
+          gh release create android-latest PrintHub.apk --target "${{ github.sha }}" \
+            --title "PrintHub for Android (build ${{ github.run_number }})" \
+            --notes "Install: open this page on the phone, download PrintHub.apk and allow installing from this source. Scanning from the printer works on the home Wi-Fi."
