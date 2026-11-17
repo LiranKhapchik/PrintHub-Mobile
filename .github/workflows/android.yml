@@ -40,7 +40,8 @@ jobs:
       - name: Configure (cleartext to LAN printers, version, icons)
         run: |
           # scanning talks plain HTTP to printers on the home network
-          sed -i 's/<application /<application android:usesCleartextTraffic="true" /' android/app/src/main/AndroidManifest.xml
+          grep -q usesCleartextTraffic android/app/src/main/AndroidManifest.xml || \
+            sed -i 's/<application\b/<application android:usesCleartextTraffic="true"/' android/app/src/main/AndroidManifest.xml
           sed -i "s/versionCode 1$/versionCode ${{ github.run_number }}/" android/app/build.gradle
           sed -i "s/versionName \"1.0\"/versionName \"1.1.${{ github.run_number }}\"/" android/app/build.gradle
           pip install --quiet pillow
