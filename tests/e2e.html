@@ -1,0 +1,160 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PrintHub Mobile - end-to-end UI test</title>
+<style>body{margin:0;font:13px monospace} iframe{width:390px;height:844px;border:0;display:block} pre{padding:8px}</style>
+<!-- The real app runs in a phone-sized frame and is driven only through its UI (DOM events). -->
+<iframe id="app" src="../index.html?e2e=1"></iframe>
+<pre id="log">running...</pre>
+<script type="module">
+const log = [], results = [];
+const say = (s) => { log.push(s); document.getElementById("log").textContent = log.join("\n"); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function check(name, ok, info = "") { results.push(ok); say(`${ok ? "PASS" : "FAIL"} ${name}${info ? "  (" + info + ")" : ""}`); }
+async function until(fn, ms = 15000) { const t = Date.now(); while (Date.now() - t < ms) { try { const v = await fn(); if (v) return v; } catch (_) {} await sleep(100); } return null; }
+
+const frame = document.getElementById("app");
+await new Promise((r) => frame.addEventListener("load", r, { once: true }));
+const w = frame.contentWindow, doc = frame.contentDocument;
+const $ = (s) => doc.querySelector(s), $$ = (s) => [...doc.querySelectorAll(s)];
+const visible = (s) => { const el = $(s); return !!el && !el.hidden; };
+await until(() => w.__printhub && w.PDFLib);
+
+try {
+  // ---------- empty state
+  check("home screen shows empty state", visible("#empty") && !visible("#mainBar"));
+
+  // ---------- open files through the real file input (change event)
+  const { PDFDocument, rgb } = w.PDFLib;
+  const d = await PDFDocument.create();
+  // arrays must come from the app frame's realm (pdf-lib checks `instanceof Array`)
+  for (let i = 1; i <= 3; i++) { const p = d.addPage(w.JSON.parse("[595, 842]")); p.drawText(`Page ${i}`, { x: 60, y: 760, size: 28 }); p.drawRectangle({ x: 60, y: 500, width: 470, height: 60, color: rgb(0.85, 0.9, 1) }); }
+  const c = doc.createElement("canvas"); c.width = 1600; c.height = 1100;
+  const x = c.getContext("2d"); x.fillStyle = "#eee"; x.fillRect(0, 0, 1600, 1100); x.fillStyle = "#c8503c"; x.fillRect(400, 300, 800, 500);
+  const imgBlob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
+  const dt = new w.DataTransfer();
+  dt.items.add(new w.File([await d.save()], "doc.pdf", { type: "application/pdf" }));
+  dt.items.add(new w.File([imgBlob], "photo.jpg", { type: "image/jpeg" }));
+  const input = $("#fileInput"); input.files = dt.files; input.dispatchEvent(new w.Event("change"));
+  await until(() => $$("#grid .tile").length === 4);
+  check("open 1 PDF (3 pages) + 1 image -> 4 tiles", $$("#grid .tile").length === 4);
+  await until(() => $$("#grid .tile img").every((im) => im.src && im.complete && im.naturalWidth > 0));
+  check("thumbnails rendered", $$("#grid .tile img").every((im) => im.naturalWidth > 0));
+  check("bottom bar visible", visible("#mainBar") && !visible("#empty"));
+
+  // ---------- selection
+  $$("#grid .tile")[0].click(); await sleep(50);
+  check("tap selects a page", $$("#grid .tile")[0].classList.contains("sel") && visible("#selBar") && !visible("#mainBar"));
+  $("#btnSelAll").click(); await sleep(50);
+  check("select all", $$("#grid .tile.sel").length === 4, $("#selCount").textContent);
+  $("#btnSelNone").click(); await sleep(50);
+  check("clear selection", $$("#grid .tile.sel").length === 0 && visible("#mainBar"));
+
+  // ---------- rotate + undo
+  $$("#grid .tile")[3].click();
+  $('#selBar [data-tool="rotate"]').click(); await sleep(100);
+  const ph = w.__printhub;
+  check("rotate image page 90", ph.pages[3].rot === 90);
+  $("#btnUndo").click(); await sleep(100);
+  check("undo rotate", ph.pages[3].rot === 0);
+
+  // ---------- move / duplicate / delete
+  $("#btnSelNone").click(); $$("#grid .tile")[3].click();
+  const imgId = ph.pages[3].id;
+  $('#selBar [data-tool="earlier"]').click(); await sleep(50);
+  check("move page earlier", ph.pages[2].id === imgId);
+  $('#selBar [data-tool="dup"]').click(); await sleep(100);
+  check("duplicate", ph.pages.length === 5);
+  $('#selBar [data-tool="delete"]').click(); await sleep(100);
+  check("delete", ph.pages.length === 4);
+
+  // ---------- drawing editor
+  $("#btnSelNone").click(); $$("#grid .tile")[0].click();
+  $('#selBar [data-tool="draw"]').click();
+  await until(() => visible("#editor") && ph.ed.W > 0);
+  check("editor opens", visible("#editor") && ph.ed.W > 0);
+  const ink = $("#edInk"), r = ink.getBoundingClientRect();
+  const fire = (type, fx, fy) => ink.dispatchEvent(new w.PointerEvent(type, { bubbles: true, pointerId: 3, pointerType: "touch", isPrimary: true, buttons: type === "pointerup" ? 0 : 1, clientX: r.left + fx * r.width, clientY: r.top + fy * r.height }));
+  const stroke = (pts) => { fire("pointerdown", ...pts[0]); pts.slice(1).forEach((p) => fire("pointermove", ...p)); fire("pointerup", ...pts.at(-1)); };
+  const tool = (t) => $(`#toolRow [data-t="${t}"]`).click();
+  tool("pen"); stroke([[0.1, 0.3], [0.3, 0.35], [0.5, 0.3]]);
+  tool("marker"); stroke([[0.08, 0.1], [0.5, 0.1]]);
+  check("marker defaults to yellow", ph.ed.annots.at(-1).c === "#f2c200" && ph.ed.annots.at(-1).op < 1);
+  tool("rect"); stroke([[0.55, 0.5], [0.9, 0.6]]);
+  tool("ellipse"); stroke([[0.1, 0.5], [0.3, 0.6]]);
+  tool("arrow"); stroke([[0.4, 0.65], [0.55, 0.55]]);
+  tool("text"); fire("pointerdown", 0.9, 0.7); fire("pointerup", 0.9, 0.7);
+  await until(() => visible("#textSheet"));
+  $("#textInput").value = "אושר לתשלום 2026"; $("#textOk").click(); await sleep(100);
+  const types = ph.ed.annots.map((a) => a.t).join(",");
+  check("pen, marker, rect, ellipse, arrow, text", types === "ink,ink,rect,ellipse,arrow,text", types);
+  const tb = ph.ed.annots.at(-1).r;
+  check("text starts at the tapped point (RTL)", Math.abs(tb[2] - 0.9) < 0.02, tb.map((v) => v.toFixed(2)).join(","));
+  // select + drag the text, then delete it and undo
+  const before = ph.ed.annots.at(-1).r[0];
+  stroke([[(tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2], [(tb[0] + tb[2]) / 2 - 0.1, (tb[1] + tb[3]) / 2 + 0.05]]);
+  check("drag moves a mark", Math.abs(ph.ed.annots.at(-1).r[0] - (before - 0.1)) < 0.01);
+  $("#edDelete").click(); await sleep(30);
+  check("delete selected mark", ph.ed.annots.length === 5);
+  $("#edUndo").click(); await sleep(30);
+  check("editor undo", ph.ed.annots.length === 6);
+
+  // ---------- signature: pad opens on first use, saved, placed
+  w.localStorage.removeItem("printhub.signature");
+  tool("sign"); fire("pointerdown", 0.4, 0.85); fire("pointerup", 0.4, 0.85);
+  await until(() => visible("#sigPad"));
+  check("signature pad opens when none saved", visible("#sigPad"));
+  await sleep(100);
+  const sc = $("#sigCanvas"), sr = sc.getBoundingClientRect();
+  const sf = (type, fx, fy) => sc.dispatchEvent(new w.PointerEvent(type, { bubbles: true, pointerId: 4, pointerType: "touch", buttons: 1, clientX: sr.left + fx * sr.width, clientY: sr.top + fy * sr.height }));
+  sf("pointerdown", 0.1, 0.6); for (let i = 0; i <= 30; i++) sf("pointermove", 0.1 + i * 0.025, 0.6 + (i % 6 < 3 ? -0.25 : 0.1)); sf("pointerup", 0.85, 0.6);
+  $("#sigSave").click();
+  await until(() => ph.ed.annots.at(-1)?.t === "sig");
+  const sig = ph.ed.annots.at(-1);
+  check("signature saved to the phone and placed", !!w.localStorage.getItem("printhub.signature") && sig.t === "sig" && sig.r.every(Number.isFinite));
+  tool("sign"); fire("pointerdown", 0.7, 0.9); fire("pointerup", 0.7, 0.9); await sleep(100);
+  check("saved signature reused without the pad", !visible("#sigPad") && ph.ed.annots.filter((a) => a.t === "sig").length === 2);
+  $("#edDone").click(); await sleep(400);
+  check("marks applied to the page", ph.pages[0].annots.length === 8 && !!$("#grid .tile .marks"));
+
+  // ---------- crop through the real cropper
+  $("#btnSelNone").click(); $$("#grid .tile")[1].click();
+  $('#selBar [data-tool="crop"]').click();
+  await until(() => visible("#cropper"));
+  $("#crAuto").click(); await sleep(50);
+  $("#crDone").click(); await sleep(400);
+  check("crop with auto margins", !!ph.pages[1].crop, JSON.stringify(ph.pages[1].crop?.map((v) => +v.toFixed(2))));
+
+  // ---------- export (same code path as Save) and verify the result
+  const bytes = await ph.core.savePdfBytes(ph.pages);
+  const out = await PDFDocument.load(bytes);
+  check("export merged PDF", out.getPageCount() === 4, `${Math.round(bytes.length / 1024)} KB`);
+  const pdfjs = await import("../vendor/pdf.min.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL("../vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const pdoc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+  const txt = (await (await pdoc.getPage(1)).getTextContent()).items.map((i) => i.str).join(" ");
+  check("original text kept + Hebrew text written", txt.includes("Page 1") && /[֐-׿]/.test(txt), txt.slice(0, 50));
+  const cropped = await pdoc.getPage(2);
+  const v = cropped.getViewport({ scale: 1 });
+  check("cropped page is smaller than A4", v.width < 595 || v.height < 842, `${Math.round(v.width)}x${Math.round(v.height)}`);
+
+  // ---------- save sheet & menu open
+  $("#btnSelNone").click();
+  doc.querySelector('[data-act="save"]').click(); await sleep(50);
+  check("save sheet opens with options", visible("#sheet") && $$("#sheet .item").length >= 3);
+  $("#sheetBack").click();
+  $("#btnMenu").click(); await sleep(50);
+  check("menu opens", visible("#sheet")); $("#sheetBack").click();
+
+  // ---------- PWA plumbing
+  const man = await (await fetch("../manifest.webmanifest")).json();
+  check("manifest valid (name, icons, share target)", man.name === "PrintHub" && man.icons.length >= 2 && !!man.share_target);
+  const reg = await until(() => w.navigator.serviceWorker.getRegistration(), 8000);
+  check("service worker registered (offline)", !!reg);
+} catch (e) {
+  check("no exceptions", false, e.stack || e.message);
+}
+const pass = results.filter(Boolean).length;
+say(`RESULT ${pass}/${results.length} passed`);
+window.__result = { pass, total: results.length, log };
+fetch("/__result", { method: "POST", body: JSON.stringify(window.__result) }).catch(() => {});
+</script>

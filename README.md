@@ -33,12 +33,14 @@ Open the site URL on the phone, then:
 | `js/core.js` | Document model, rendering (pdf.js), Hebrew visual ordering, PDF export (pdf-lib) |
 | `sw.js`, `manifest.webmanifest` | Offline support, install, share target |
 | `vendor/` | pdf.js 4.10.38 (legacy build), pdf-lib 1.17.1, @pdf-lib/fontkit 1.1.1, SortableJS 1.15.6, Noto Sans Hebrew |
-| `tests/placement.html` | Export accuracy tests (marks land where drawn, for every rotation/crop/source type) |
+| `tests/placement.html` | Export accuracy tests (marks land where drawn, for every rotation/crop/source type) - 48 checks |
+| `tests/e2e.html` | End-to-end UI test: drives the real app in a phone-sized frame (open, select, rotate, undo, move, duplicate, delete, draw, text, signature, crop, export, PWA) - 31 checks |
 
 ## Development
 
 Any static server works, e.g. `python -m http.server 8765` and open `http://localhost:8765`.
-Run `tests/placement.html` after changes to export code.
+Open `tests/e2e.html` and `tests/placement.html` on the local server; each page prints `RESULT n/n passed`
+(and POSTs the result to `/__result`, so they can also run in headless Chrome/Edge).
 
 ## Licenses
 
