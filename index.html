@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PrintHub</title>
+<meta name="description" content="עריכת PDF, סריקה במצלמה והדפסה - הכל בטלפון">
+<meta name="theme-color" content="#2f5bd3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121418" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="PrintHub">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="css/app.css">
+<script src="vendor/pdf-lib.min.js" defer></script>
+<script src="vendor/fontkit.umd.min.js" defer></script>
+<script src="vendor/Sortable.min.js" defer></script>
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<!-- ======================= main: document workspace ======================= -->
+<header class="appbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" class="logo"><path d="M7 9V3.5h10V9"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v6.5H7z"/></svg>
+    <div>
+      <div class="title">PrintHub</div>
+      <div class="sub" id="docInfo">עריכת PDF וסריקה</div>
+    </div>
+  </div>
+  <div class="bar-actions">
+    <button class="icon-btn" id="btnUndo" title="ביטול פעולה" disabled><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button class="icon-btn" id="btnMenu" title="עוד"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button>
+  </div>
+</header>
+
+<main id="workspace">
+  <section id="empty" class="empty">
+    <div class="empty-art"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6"/><path d="M9 15.5h6"/></svg></div>
+    <h1>מה נעשה היום?</h1>
+    <p>פתח PDF או תמונות מהטלפון, או סרוק מסמך במצלמה. אפשר למזג, לסדר, לחתוך, לסמן ולחתום.</p>
+    <div class="empty-actions">
+      <button class="big-btn primary" data-act="open"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>פתיחת קבצים<small>PDF ותמונות</small></span></button>
+      <button class="big-btn" data-act="camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>סריקה במצלמה<small>צילום, חיתוך ושיפור</small></span></button>
+    </div>
+    <p class="privacy"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>הקבצים נשארים בטלפון, שום דבר לא נשלח לשרת.</p>
+  </section>
+
+  <section id="pagesWrap" hidden>
+    <div class="hint" id="gridHint">הקש לבחירת עמוד · לחיצה ארוכה וגרירה לשינוי סדר</div>
+    <div id="grid" class="grid"></div>
+  </section>
+</main>
+
+<!-- selection toolbar -->
+<nav id="selBar" class="selbar" hidden>
+  <div class="sel-info"><button class="link" id="btnSelNone">ביטול</button><span id="selCount"></span><button class="link" id="btnSelAll">הכל</button></div>
+  <div class="sel-tools">
+    <button data-tool="draw"><svg viewBox="0 0 24 24"><path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 7l3 3"/></svg><span>ציור וחתימה</span></button>
+    <button data-tool="rotate"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg><span>סיבוב</span></button>
+    <button data-tool="crop"><svg viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/></svg><span>חיתוך</span></button>
+    <button data-tool="earlier"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span>הקדמה</span></button>
+    <button data-tool="later"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg><span>הזזה</span></button>
+    <button data-tool="dup"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2"/></svg><span>שכפול</span></button>
+    <button data-tool="delete" class="danger"><svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg><span>מחיקה</span></button>
+  </div>
+</nav>
+
+<!-- main bottom bar -->
+<nav id="mainBar" class="mainbar" hidden>
+  <button data-act="add"><svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg><span>הוספה</span></button>
+  <button data-act="save" class="primary"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M4 18v2h16v-2"/></svg><span>שמירה ושיתוף</span></button>
+  <button data-act="print"><svg viewBox="0 0 24 24"><path d="M7 9V3.5h10V9"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v6.5H7z"/></svg><span>הדפסה</span></button>
+</nav>
+
+<input type="file" id="fileInput" accept="application/pdf,image/*" multiple hidden>
+<input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
+
+<!-- ======================= bottom sheet (menus) ======================= -->
+<div id="sheetBack" class="sheet-back" hidden></div>
+<div id="sheet" class="sheet" hidden></div>
+
+<!-- ======================= full-screen editors ======================= -->
+<section id="editor" class="fullscreen" hidden>
+  <header class="ed-bar">
+    <button class="link" id="edCancel">ביטול</button>
+    <div class="ed-title" id="edTitle">ציור וסימון</div>
+    <button class="pill-btn" id="edDone">סיום</button>
+  </header>
+  <div class="ed-stage" id="edStage"><canvas id="edBase"></canvas><canvas id="edInk"></canvas></div>
+  <div class="ed-hint" id="edHint"></div>
+  <footer class="ed-tools">
+    <div class="tool-row" id="toolRow"></div>
+    <div class="opt-row">
+      <div class="swatches" id="swatches"></div>
+      <div class="seg" id="sizeSeg"><button data-size="0">דק</button><button data-size="1" class="on">בינוני</button><button data-size="2">עבה</button></div>
+      <button class="icon-btn" id="edUndo" title="ביטול"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+      <button class="icon-btn" id="edDelete" title="מחיקת הנבחר"><svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg></button>
+    </div>
+  </footer>
+</section>
+
+<section id="cropper" class="fullscreen" hidden>
+  <header class="ed-bar">
+    <button class="link" id="crCancel">ביטול</button>
+    <div class="ed-title" id="crTitle">חיתוך</div>
+    <button class="pill-btn" id="crDone">חיתוך</button>
+  </header>
+  <div class="ed-stage" id="crStage"><canvas id="crCanvas"></canvas><div id="crBox" class="crop-box"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div>
+  <footer class="cr-tools">
+    <button id="crAuto">זיהוי שוליים</button>
+    <button id="crFull">עמוד מלא</button>
+    <label class="toggle" id="crEnhanceWrap" hidden><input type="checkbox" id="crEnhance" checked><span>שיפור מסמך</span></label>
+  </footer>
+</section>
+
+<section id="sigPad" class="fullscreen" hidden>
+  <header class="ed-bar">
+    <button class="link" id="sigCancel">ביטול</button>
+    <div class="ed-title">ציור חתימה</div>
+    <button class="pill-btn" id="sigSave">שמירה</button>
+  </header>
+  <div class="sig-wrap">
+    <p class="hint">חתום עם האצבע בתוך המסגרת. החתימה נשמרת בטלפון בלבד.</p>
+    <canvas id="sigCanvas"></canvas>
+    <button id="sigClear">ניקוי</button>
+  </div>
+</section>
+
+<div id="textSheet" class="modal" hidden>
+  <div class="modal-card">
+    <h3>טקסט</h3>
+    <textarea id="textInput" rows="3" dir="auto" placeholder="הקלד טקסט..."></textarea>
+    <div class="modal-actions"><button id="textCancel">ביטול</button><button class="primary" id="textOk">הוספה</button></div>
+  </div>
+</div>
+
+<div id="busy" class="busy" hidden><div class="spinner"></div><div id="busyText">רגע...</div></div>
+<div id="toast" class="toast" hidden></div>
+<div id="printArea" aria-hidden="true"></div>
+</body>
+</html>

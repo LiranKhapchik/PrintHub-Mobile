@@ -1,0 +1,94 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PrintHub Mobile - export placement tests</title>
+<script src="../vendor/pdf-lib.min.js"></script>
+<script src="../vendor/fontkit.umd.min.js"></script>
+<pre id="log">running...</pre>
+<script type="module">
+import * as core from "../js/core.js";
+import * as pdfjsLib from "../vendor/pdf.min.mjs";
+const { PDFDocument, degrees, rgb } = PDFLib;
+const log = [];
+const say = (s) => { log.push(s); document.getElementById("log").textContent = log.join("\n"); };
+
+async function makePdf({ rotate = 0, cropbox = null } = {}) {
+  const d = await PDFDocument.create();
+  const p = d.addPage([595, 842]);
+  p.drawText("BASE", { x: 60, y: 760, size: 20 });
+  if (cropbox) p.setCropBox(...cropbox);
+  if (rotate) p.setRotation(degrees(rotate));
+  return new File([await d.save()], "src.pdf", { type: "application/pdf" });
+}
+async function makeImg() {
+  const c = document.createElement("canvas"); c.width = 1240; c.height = 1754;
+  const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
+  const b = await new Promise((r) => c.toBlob(r, "image/png"));
+  return new File([b], "img.png", { type: "image/png" });
+}
+async function renderExport(bytes) {
+  const doc = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const pg = await doc.getPage(1);
+  const vp = pg.getViewport({ scale: 0.6 });
+  const c = document.createElement("canvas"); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+  const ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+  await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+  return c;
+}
+function centroid(c, test) {
+  const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+  let sx = 0, sy = 0, n = 0, x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1;
+  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+    const i = (y * c.width + x) * 4;
+    if (test(d[i], d[i + 1], d[i + 2])) { sx += x; sy += y; n++; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  }
+  return n ? { x: sx / n / c.width, y: sy / n / c.height, w: (x1 - x0) / c.width, h: (y1 - y0) / c.height } : null;
+}
+const red = (r, g, b) => r > 180 && g < 90 && b < 90;
+const blue = (r, g, b) => b > 150 && r < 90 && g < 110;
+
+let pass = 0, total = 0;
+const srcs = {
+  plain: () => makePdf(), rot90: () => makePdf({ rotate: 90 }), rot270: () => makePdf({ rotate: 270 }),
+  cropbox: () => makePdf({ cropbox: [30, 40, 550, 780] }), img: () => makeImg(),
+};
+for (const [name, mk] of Object.entries(srcs)) {
+  const [base] = await core.addFile(await mk());
+  for (const rot of [0, 90, 180, 270]) for (const crop of [null, [0.1, 0.05, 0.95, 0.9]]) {
+    let p = core.rotatePage(base, rot);
+    if (crop) p = core.cropPage(p, crop);
+    const [cx, cy] = [0.75, 0.2];
+    p = { ...p, annots: [
+      { t: "rect", r: [cx - 0.05, cy - 0.04, cx + 0.05, cy + 0.04], c: "#ff0000", w: 0.012 },
+      { t: "ink", pts: [[[cx - 0.03, cy], [cx + 0.03, cy]]], c: "#ff0000", w: 0.01 },
+      { t: "arrow", p: [0.2, 0.8, 0.3, 0.7], c: "#ff0000", w: 0.006 },
+    ] };
+    // arrow pulls the centroid; compute expected red centroid from a reference render of the editor canvas
+    const ref = await core.renderPage(p, 420);
+    const exp = centroid(ref, red);
+    const got = centroid(await renderExport(await core.savePdfBytes([p])), red);
+    total++;
+    const ok = got && Math.abs(got.x - exp.x) < 0.03 && Math.abs(got.y - exp.y) < 0.03;
+    if (ok) pass++; else say(`FAIL ${name} rot=${rot} crop=${!!crop}: exported ${JSON.stringify(got)} vs editor ${JSON.stringify(exp)}`);
+  }
+}
+// text: upright (wide, not tall) and placed where the editor shows it, also after page rotation
+for (const name of ["plain", "rot90"]) for (const rot of [0, 90]) for (const after of [false, true]) {
+  const [base] = await core.addFile(await srcs[name]());
+  let p = core.rotatePage(base, after ? 0 : rot);
+  p = { ...p, annots: [{ t: "text", r: [0.5, 0.6, 0.95, 0.68], s: "שלום עולם 2026", c: "#0000ff", fs: 0.05 }] };
+  if (after) p = core.rotatePage(p, rot);       // text placed first, then the page is rotated
+  const exp = centroid(await core.renderPage(p, 420), blue);
+  const got = centroid(await renderExport(await core.savePdfBytes([p])), blue);
+  total++;
+  const upright = got && (after && rot % 180 ? got.h > got.w : got.w > got.h);
+  const ok = got && exp && upright && Math.abs(got.x - exp.x) < 0.06 && Math.abs(got.y - exp.y) < 0.06;
+  if (ok) pass++; else say(`FAIL text ${name} rot=${rot} rotatedAfter=${after}: exported ${JSON.stringify(got)} vs editor ${JSON.stringify(exp)}`);
+}
+// bidi sanity
+const runs = core.visualRuns("אושר 12.5 PrintHub (בדיקה)").map((r) => r.t).join("|");
+say(`visual runs: ${runs}`);
+say(`RESULT ${pass}/${total} passed`);
+window.__result = { pass, total, log };
+// report to the headless test runner when present (harmless 404 elsewhere)
+fetch("/__result", { method: "POST", body: JSON.stringify(window.__result) }).catch(() => {});
+</script>
